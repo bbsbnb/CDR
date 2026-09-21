@@ -22,6 +22,7 @@ const pageMeta = {
   institutions: ['制度库', '查询公司内部流程、时限、审批与管理标准'],
   analyzer: ['纠纷分析', '按案件推进核验、研判、处置与内部汇报'],
   toolkit: ['工具包', '独立使用五类标准模板，或导入当前案件'],
+  'api-config': ['API 配置', '管理本机大模型调用状态与安全配置'],
 };
 
 const riskStages = [
@@ -136,7 +137,7 @@ function bindShell() {
 
 async function renderRoute() {
   const parts = location.pathname.split('/').filter(Boolean);
-  const section = ['cases', 'institutions', 'analyzer', 'toolkit'].includes(parts[0]) ? parts[0] : 'cases';
+  const section = ['cases', 'institutions', 'analyzer', 'toolkit', 'api-config'].includes(parts[0]) ? parts[0] : 'cases';
   try {
     if (section === 'cases' && parts[1]) await renderDocumentDetail('case', parts[1]);
     else if (section === 'institutions' && parts[1]) await renderDocumentDetail('institution', parts[1]);
@@ -144,6 +145,7 @@ async function renderRoute() {
     else if (section === 'institutions') await renderLibrary('institutions');
     else if (section === 'analyzer' && parts[1]) await openMatter(parts[1]);
     else if (section === 'analyzer') await renderMatterDashboard();
+    else if (section === 'api-config') await renderApiConfig();
     else renderToolkit();
   } catch (error) {
     app.innerHTML = `<div class="empty-state"><b>页面加载失败</b>${escapeHtml(error.message)}</div>`;
@@ -665,6 +667,23 @@ function renderToolkit() {
   $$('[data-tool-bind]').forEach(control => control.addEventListener('input', event => { const [path, index, key] = event.target.dataset.toolBind.split('.'); state.toolkit[path][Number(index)][key] = event.target.value; saveToolkit(); if (key === 'due') renderToolkit(); }));
   $$('[data-tool-add]').forEach(button => button.addEventListener('click', () => { state.toolkit[button.dataset.toolAdd].push({}); saveToolkit(); renderToolkit(); }));
   $$('[data-tool-delete]').forEach(button => button.addEventListener('click', () => { const [path, index] = button.dataset.toolDelete.split(':'); state.toolkit[path].splice(Number(index), 1); saveToolkit(); renderToolkit(); }));
+}
+
+async function renderApiConfig() {
+  setPage('api-config');
+  app.innerHTML = '<div class="panel"><div class="panel-title"><div><h2>API 配置</h2><p>大模型调用仅由本机后端代理，浏览器不会接触 API Key。</p></div><span class="ai-state">读取状态中…</span></div><div class="empty-state">正在读取本机 AI 配置状态…</div></div>';
+  try {
+    const data = await api('/api/ai/status');
+    const taskRows = Object.entries(data.tasks || {}).map(([key, label]) => `<div class="api-task"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(key)}</span></div>`).join('');
+    app.innerHTML = `<div class="page-head"><div><h2>API 配置</h2><p>管理本机大模型调用状态与安全配置</p></div><button class="button" id="refresh-api-status">刷新状态</button></div>
+      <div class="notice ${data.enabled ? 'info' : ''}"><b>${data.enabled ? 'AI 已启用' : 'AI 未启用'}</b> · ${data.enabled ? `当前模型：${escapeHtml(data.model || '未返回')}` : '本地案例库、制度库、案件工作台和报告导出不受影响。'}</div>
+      <div class="api-config-grid"><section class="panel"><div class="panel-title"><h3>连接状态</h3><span class="api-status-dot ${data.enabled ? 'on' : ''}"></span></div><div class="api-facts"><div><span>启用状态</span><strong>${data.enabled ? '已启用' : '未启用'}</strong></div><div><span>当前模型</span><strong>${escapeHtml(data.model || '未配置')}</strong></div><div><span>调用方式</span><strong>本机 FastAPI 后端代理</strong></div><div><span>数据范围</span><strong>当前案件摘要与已选依据</strong></div></div></section><section class="panel"><div class="panel-title"><h3>支持的分析任务</h3></div><div class="api-task-list">${taskRows}</div></section></div>
+      <section class="panel"><div class="panel-title"><div><h3>本机配置方式</h3><p>API Key 不在页面输入、不写入前端、不保存到 SQLite。</p></div></div><div class="api-code">$env:DISPUTE_EXPERT_AI_API_KEY = "你的 API Key"<br>$env:DISPUTE_EXPERT_AI_MODEL = "gpt-6-astra"<br>.\\run.ps1</div><div class="notice danger">请勿把 API Key 写入 Git 仓库、截图、案件正文或浏览器存储。模型输出仅为 AI 草稿，仍需人工和律师核验。</div></section>`;
+    $('#refresh-api-status').addEventListener('click', renderApiConfig);
+  } catch (error) {
+    app.innerHTML = `<div class="empty-state"><b>配置状态读取失败</b>${escapeHtml(error.message)}<br><button class="button" id="retry-api-status">重试</button></div>`;
+    $('#retry-api-status').addEventListener('click', renderApiConfig);
+  }
 }
 
 function renderToolEditor(selected) {
