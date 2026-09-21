@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>点点星辉工程纠纷专家</title>
+  <link rel="icon" href="/static/avatar.png">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <img src="/static/avatar.png" alt="点点星辉工程纠纷专家头像">
+        <div><strong>点点星辉工程纠纷专家</strong><span>专业 · 高效 · 可信赖</span></div>
+      </div>
+      <nav aria-label="主导航">
+        <button class="nav-item active" data-route="/cases"><span aria-hidden="true">▤</span>案例库</button>
+        <button class="nav-item" data-route="/institutions"><span aria-hidden="true">▧</span>制度库</button>
+        <button class="nav-item" data-route="/analyzer"><span aria-hidden="true">⌕</span>纠纷分析</button>
+        <button class="nav-item" data-route="/toolkit"><span aria-hidden="true">⊞</span>工具包</button>
+      </nav>
+      <div class="sidebar-note"><span class="status-dot"></span>系统运行正常<br><small>数据更新：本地知识库<br>版本号：v2.8.0</small></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" id="mobile-menu" title="打开导航" aria-label="打开导航">☰</button>
+        <div class="page-identity"><h1 id="page-title">案例库</h1><p id="page-subtitle">从行业案例中定位相似问题和实操判据</p></div>
+        <div class="global-search"><span aria-hidden="true">⌕</span><input id="global-search" type="search" placeholder="搜索案例、制度或编号" autocomplete="off"><div class="search-popover hidden" id="search-popover"></div></div>
+        <button class="current-matter" id="current-matter-button" title="打开当前案件"><span>当前案件 / 工作区</span><strong id="current-matter-name">未选择</strong></button>
+        <button class="top-icon" title="系统通知" aria-label="系统通知">♧<span>3</span></button>
+        <div class="top-user"><img src="/static/avatar.png" alt="用户头像"><span>⌄</span></div>
+      </header>
+      <div class="confidential-bar">内部资料仅限本机使用。制度文本均无法证明已正式发布；对外结论必须回到项目合同与现行法律。</div>
+      <main id="app" tabindex="-1"></main>
+    </div>
+  </div>
+  <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

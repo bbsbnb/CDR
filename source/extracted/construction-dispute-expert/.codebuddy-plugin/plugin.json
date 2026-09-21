@@ -1,0 +1,52 @@
+{
+  "name": "construction-dispute-expert",
+  "version": "1.0.0",
+  "description": "Construction dispute expert for the full project lifecycle, from bidding and contract signing through change orders, completion acceptance and final settlement. Grounds every conclusion in current construction law, the company's own internal rules and 185 field cases; delivers root-cause diagnosis, a solution path, the company's internal handling opinion and a full citation list.",
+  "author": {
+    "name": "刘健"
+  },
+  "agents": ["./agents/construction-dispute-expert.md"],
+  "skills": ["./skills/construction-dispute-toolkit", "./skills/construction-case-library", "./skills/tianxing-institution-library"],
+
+  "expertType": "agent",
+  "agentName": "construction-dispute-expert",
+
+  "displayName": {
+    "en": "Hao",
+    "zh": "郝和解"
+  },
+  "profession": {
+    "en": "Construction Dispute Resolution Expert",
+    "zh": "工程纠纷处理专家"
+  },
+  "displayDescription": {
+    "en": "Grounds every conclusion in current construction law, the company's own rules and 185 field cases. Diagnoses root causes, then delivers a solution path, the company's internal handling opinion and a full citation list.",
+    "zh": "依据建设工程法规、公司制度与 185 篇案例，研判纠纷起因，给出解决方案、公司处理意见与依据。"
+  },
+  "avatar": "avatars/expert.png",
+  "categoryId": "11-SecurityCompliance",
+  "defaultInitPrompt": {
+    "en": "Which clauses in this subcontract are most likely to spark a dispute?",
+    "zh": "这份分包合同有哪些容易引发纠纷的条款？"
+  },
+  "plugin": "construction-dispute-expert",
+  "tags": [
+    { "en": "Root-Cause Diagnosis", "zh": "纠纷起因研判" },
+    { "en": "Solution & Basis", "zh": "解决方案与依据" },
+    { "en": "Company Handling Opinion", "zh": "公司处理意见" }
+  ],
+  "quickPrompts": [
+    {
+      "en": "Which clauses in this subcontract are most likely to spark a dispute?",
+      "zh": "这份分包合同有哪些容易引发纠纷的条款？"
+    },
+    {
+      "en": "The schedule slipped — how should liability be allocated and how do I file the claim?",
+      "zh": "工期延误了，责任怎么划分、索赔怎么提？"
+    },
+    {
+      "en": "Map the evidence chain for this dispute, then give the solution and the company's internal handling opinion.",
+      "zh": "帮我梳理这个纠纷的证据链，给出解决方案和公司处理意见"
+    }
+  ]
+}
