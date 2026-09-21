@@ -29,7 +29,10 @@
         <div class="page-identity"><h1 id="page-title">案例库</h1><p id="page-subtitle">从行业案例中定位相似问题和实操判据</p></div>
         <div class="global-search"><span aria-hidden="true">⌕</span><input id="global-search" type="search" placeholder="搜索案例、制度或编号" autocomplete="off"><div class="search-popover hidden" id="search-popover"></div></div>
         <button class="current-matter" id="current-matter-button" title="打开当前案件"><span>当前案件 / 工作区</span><strong id="current-matter-name">未选择</strong></button>
-        <button class="top-icon" title="系统通知" aria-label="系统通知">♧<span>3</span></button>
+        <div class="notification-center">
+          <button class="top-icon" id="notification-button" title="系统消息" aria-label="打开系统消息" aria-expanded="false">♧<span class="hidden" id="notification-count">0</span></button>
+          <div class="notification-panel hidden" id="notification-panel" aria-label="系统消息列表"></div>
+        </div>
         <div class="top-user"><img src="/static/avatar.png" alt="用户头像"><span>⌄</span></div>
       </header>
       <div class="confidential-bar">内部资料仅限本机使用。制度文本均无法证明已正式发布；对外结论必须回到项目合同与现行法律。</div>

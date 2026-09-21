@@ -15,6 +15,8 @@ const state = {
   favorites: JSON.parse(localStorage.getItem('caseFavorites') || '[]'),
   toolkit: JSON.parse(localStorage.getItem('toolkitState') || 'null') || {},
   caseIndex: null,
+  notifications: [],
+  readNotificationIds: JSON.parse(localStorage.getItem('readNotificationIds') || '[]'),
 };
 
 const pageMeta = {
@@ -128,6 +130,12 @@ function bindShell() {
   $$('.nav-item').forEach(button => button.addEventListener('click', () => navigate(button.dataset.route)));
   $('#mobile-menu').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
   $('#current-matter-button').addEventListener('click', () => navigate(state.currentMatterId ? `/analyzer/${state.currentMatterId}` : '/analyzer'));
+  $('#notification-button').addEventListener('click', event => {
+    event.stopPropagation();
+    const panel = $('#notification-panel');
+    panel.classList.toggle('hidden');
+    event.currentTarget.setAttribute('aria-expanded', String(!panel.classList.contains('hidden')));
+  });
   window.addEventListener('popstate', renderRoute);
   const globalSearch = debounce(async value => {
     const popover = $('#search-popover');
@@ -145,21 +153,89 @@ function bindShell() {
     }));
   }, 250);
   $('#global-search').addEventListener('input', event => globalSearch(event.target.value));
-  document.addEventListener('click', event => { if (!event.target.closest('.global-search')) $('#search-popover').classList.add('hidden'); });
+  document.addEventListener('click', event => {
+    if (!event.target.closest('.global-search')) $('#search-popover').classList.add('hidden');
+    if (!event.target.closest('.notification-center')) closeNotifications();
+  });
+}
+
+function closeNotifications() {
+  $('#notification-panel')?.classList.add('hidden');
+  $('#notification-button')?.setAttribute('aria-expanded', 'false');
+}
+
+async function refreshNotifications() {
+  const notifications = [];
+  try {
+    const ai = await api('/api/ai/status');
+    if (!ai.enabled) notifications.push({ id: 'ai-disabled', level: 'warn', title: 'AI 功能尚未配置', detail: '配置 API 后可使用案件分析和报告草稿。', route: '/api-config' });
+    else if (ai.connection_status === 'failed') notifications.push({ id: `ai-failed:${ai.provider}:${ai.model}`, level: 'risk', title: 'AI 连接失败', detail: ai.connection_message || '请检查服务商配置。', route: '/api-config' });
+    else if (ai.connection_status !== 'verified') notifications.push({ id: `ai-untested:${ai.provider}:${ai.model}`, level: 'warn', title: 'AI 配置等待验证', detail: '请运行连接测试后再分析案件。', route: '/api-config' });
+  } catch {
+    notifications.push({ id: 'ai-status-error', level: 'risk', title: 'AI 状态读取失败', detail: '本地知识库仍可正常使用。', route: '/api-config' });
+  }
+
+  if (!state.currentMatterId || !state.matter) {
+    notifications.push({ id: 'matter-missing', level: 'warn', title: '尚未选择当前案件', detail: '新建或打开案件后可使用完整分析流程。', route: '/analyzer' });
+  } else {
+    const step = Number(state.matter.current_step || 1);
+    if (step < 9) notifications.push({ id: `matter-progress:${state.matter.id}:${step}`, level: 'info', title: '案件分析尚未完成', detail: `${state.matter.title} 当前推进至第 ${step} 步。`, route: `/analyzer/${state.matter.id}` });
+    const deadlines = state.matter.sections?.deadlines || [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    deadlines.filter(row => row.due && row.status !== '已完成').forEach((row, index) => {
+      const due = new Date(`${row.due}T00:00:00`);
+      const days = Math.ceil((due - today) / 86400000);
+      if (Number.isNaN(days) || days > 7) return;
+      notifications.push({
+        id: `deadline:${state.matter.id}:${index}:${row.due}`,
+        level: days < 0 ? 'risk' : 'warn',
+        title: days < 0 ? '案件期限已逾期' : '案件期限临近',
+        detail: `${row.item || '未命名事项'}：${days < 0 ? `逾期 ${Math.abs(days)} 天` : days === 0 ? '今天到期' : `${days} 天后到期`}。`,
+        route: `/analyzer/${state.matter.id}?step=7`,
+      });
+    });
+  }
+  state.notifications = notifications;
+  renderNotifications();
+}
+
+function renderNotifications() {
+  const read = new Set(state.readNotificationIds);
+  const unread = state.notifications.filter(item => !read.has(item.id));
+  const badge = $('#notification-count');
+  badge.textContent = String(unread.length);
+  badge.classList.toggle('hidden', unread.length === 0);
+  const panel = $('#notification-panel');
+  panel.innerHTML = `<div class="notification-head"><strong>系统消息</strong><button id="mark-notifications-read" ${unread.length ? '' : 'disabled'}>全部已读</button></div><div class="notification-list">${state.notifications.length ? state.notifications.map(item => `<button class="notification-item ${read.has(item.id) ? 'read' : ''}" data-notification-id="${escapeHtml(item.id)}" data-notification-route="${escapeHtml(item.route)}"><i class="${item.level}"></i><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.detail)}</small></span></button>`).join('') : '<div class="notification-empty">暂无需要处理的系统消息</div>'}</div>`;
+  $('#mark-notifications-read')?.addEventListener('click', event => {
+    event.stopPropagation();
+    state.readNotificationIds = [...new Set([...state.readNotificationIds, ...state.notifications.map(item => item.id)])].slice(-100);
+    localStorage.setItem('readNotificationIds', JSON.stringify(state.readNotificationIds));
+    renderNotifications();
+  });
+  $$('.notification-item', panel).forEach(button => button.addEventListener('click', () => {
+    state.readNotificationIds = [...new Set([...state.readNotificationIds, button.dataset.notificationId])].slice(-100);
+    localStorage.setItem('readNotificationIds', JSON.stringify(state.readNotificationIds));
+    closeNotifications();
+    navigate(button.dataset.notificationRoute);
+  }));
 }
 
 async function renderRoute() {
   const parts = location.pathname.split('/').filter(Boolean);
+  const requestedStep = Number(new URLSearchParams(location.search).get('step'));
   const section = ['cases', 'institutions', 'analyzer', 'toolkit', 'api-config'].includes(parts[0]) ? parts[0] : 'cases';
   try {
     if (section === 'cases' && parts[1]) await renderDocumentDetail('case', parts[1]);
     else if (section === 'institutions' && parts[1]) await renderDocumentDetail('institution', parts[1]);
     else if (section === 'cases') await renderLibrary('cases');
     else if (section === 'institutions') await renderLibrary('institutions');
-    else if (section === 'analyzer' && parts[1]) await openMatter(parts[1]);
+    else if (section === 'analyzer' && parts[1]) { await openMatter(parts[1]); if (requestedStep >= 1 && requestedStep <= 9) { state.analyzerStep = requestedStep; renderAnalyzer(); } }
     else if (section === 'analyzer') await renderMatterDashboard();
     else if (section === 'api-config') await renderApiConfig();
     else renderToolkit();
+    await refreshNotifications();
   } catch (error) {
     app.innerHTML = `<div class="empty-state"><b>页面加载失败</b>${escapeHtml(error.message)}</div>`;
   }
@@ -752,6 +828,7 @@ async function renderApiConfig() {
       toast('会话配置已清除');
       await renderApiConfig();
     });
+    await refreshNotifications();
   } catch (error) {
     app.innerHTML = `<div class="empty-state"><b>配置状态读取失败</b>${escapeHtml(error.message)}<br><button class="button" id="retry-api-status">重试</button></div>`;
     $('#retry-api-status').addEventListener('click', renderApiConfig);
