@@ -36,10 +36,11 @@
 @media(max-width:760px){.case-library-page .page-identity{display:none}.case-library-page .confidential-bar{display:none}.case-content-grid{display:block}.case-side-tools{display:none}.case-table-head{display:none}.case-library-page .case-row,.case-library-page .card-view .case-row{grid-template-columns:40px minmax(0,1fr) 12px;min-height:74px}.case-topic,.case-action{grid-column:2}.case-action{display:flex}.case-library-page .case-results{padding:8px}.case-library-page .case-row .case-favorite{display:inline-block}}
 .case-library-page .app-shell{grid-template-columns:208px minmax(0,1fr)}
 .case-library-page .sidebar{width:208px;padding:18px 12px}
-.case-library-page .brand{flex-direction:column;align-items:center;gap:9px;min-height:112px;padding:2px 8px 18px;text-align:center}
-.case-library-page .brand img{width:52px;height:52px;border-radius:7px}
-.case-library-page .brand strong{font-size:19px;line-height:1.35}
-.case-library-page .brand span{font-size:10px;margin-top:3px}
+.case-library-page .brand{flex-direction:column;align-items:center;gap:10px;min-height:150px;padding:2px 8px 16px;text-align:center}
+.case-library-page .brand img{width:52px;height:52px;border-radius:7px;flex:0 0 52px}
+.case-library-page .brand>div{width:100%}
+.case-library-page .brand strong{font-size:19px;line-height:1.28;white-space:normal}
+.case-library-page .brand span{font-size:10px;margin-top:5px}
 .case-library-page .sidebar nav{margin-top:18px;gap:4px}
 .case-library-page .nav-item{height:auto;padding:10px 12px;font-size:14px}
 .case-library-page .sidebar-note{padding:12px 8px;font-size:12px;line-height:1.7}
