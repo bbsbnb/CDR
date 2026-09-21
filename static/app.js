@@ -25,6 +25,19 @@ const pageMeta = {
   'api-config': ['API 配置', '管理本机大模型调用状态与安全配置'],
 };
 
+const aiProviderPresets = {
+  openai: { name: 'OpenAI 官方', url: 'https://api.openai.com/v1/responses', protocol: 'responses', model: 'gpt-6-astra' },
+  deepseek: { name: 'DeepSeek', url: 'https://api.deepseek.com/chat/completions', protocol: 'chat_completions', model: 'deepseek-chat' },
+  aliyun: { name: '阿里云百炼', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', protocol: 'chat_completions', model: 'qwen-plus' },
+  siliconflow: { name: '硅基流动', url: 'https://api.siliconflow.cn/v1/chat/completions', protocol: 'chat_completions', model: 'Qwen/Qwen3-8B' },
+  moonshot: { name: '月之暗面 Kimi', url: 'https://api.moonshot.cn/v1/chat/completions', protocol: 'chat_completions', model: 'moonshot-v1-8k' },
+  zhipu: { name: '智谱开放平台', url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', protocol: 'chat_completions', model: 'glm-4-flash' },
+  baichuan: { name: '百川智能', url: 'https://api.baichuan-ai.com/v1/chat/completions', protocol: 'chat_completions', model: 'Baichuan4' },
+  hunyuan: { name: '腾讯混元', url: 'https://api.hunyuan.cloud.tencent.com/v1/chat/completions', protocol: 'chat_completions', model: 'hunyuan-turbos-latest' },
+  volcengine: { name: '火山方舟', url: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions', protocol: 'chat_completions', model: '' },
+  custom: { name: '自定义兼容服务', url: '', protocol: 'chat_completions', model: '' },
+};
+
 const riskStages = [
   ['招投标', '核对招标文件、投标文件、中标通知书和备案合同的实质内容'],
   ['合同签订', '核对多版本合同、签约日期、质保金与缺陷责任期'],
@@ -680,11 +693,19 @@ async function renderApiConfig() {
     const source = data.source === 'session' ? '当前服务会话' : data.source === 'environment' ? '本机环境变量' : '未配置';
     const connectionLabel = data.connection_status === 'verified' ? '连接正常' : data.connection_status === 'failed' ? '连接失败' : data.enabled ? '等待测试' : '未启用';
     const connectionClass = data.connection_status === 'verified' ? 'verified' : data.connection_status === 'failed' ? 'failed' : '';
+    const currentProvider = Object.entries(aiProviderPresets).find(([, preset]) => preset.url === data.endpoint)?.[0] || 'custom';
+    const providerOptions = Object.entries(aiProviderPresets).map(([key, preset]) => `<option value="${key}" ${key === currentProvider ? 'selected' : ''}>${escapeHtml(preset.name)}</option>`).join('');
     app.innerHTML = `<div class="page-head"><div><h2>API 配置</h2><p>管理本机大模型调用状态与安全配置</p></div><button class="button" id="refresh-api-status">刷新状态</button></div>
       <div class="notice ${data.connection_status === 'verified' ? 'info' : data.connection_status === 'failed' ? 'danger' : ''}"><b>${connectionLabel}</b> · ${escapeHtml(data.connection_message || (data.enabled ? `当前模型：${data.model}` : '本地功能不受影响。'))}</div>
-      <div class="api-config-grid"><section class="panel"><div class="panel-title"><h3>连接状态</h3><span class="api-status-dot ${connectionClass}"></span></div><div class="api-facts"><div><span>配置状态</span><strong>${data.enabled ? '已保存' : '未配置'}</strong></div><div><span>连接验证</span><strong>${connectionLabel}</strong></div><div><span>当前模型</span><strong>${escapeHtml(data.model || '未配置')}</strong></div><div><span>配置来源</span><strong>${source}</strong></div><div><span>数据范围</span><strong>测试连接不发送案件资料</strong></div><div><span>最后测试</span><strong>${escapeHtml(data.last_tested_at ? data.last_tested_at.replace('T', ' ') : '尚未测试')}</strong></div></div>${data.enabled ? '<button class="button" id="test-api-connection">测试连接</button>' : ''}</section><section class="panel"><div class="panel-title"><h3>支持的分析任务</h3></div><div class="api-task-list">${taskRows}</div></section></div>
-      <section class="panel"><div class="panel-title"><div><h3>自定义 OpenAI Key</h3><p>Key 仅发送到本机 127.0.0.1 服务并保存在进程内存中，重启服务后自动清除。</p></div></div><form id="api-config-form" class="api-config-form" autocomplete="off"><label><span>OpenAI API Key</span><input id="api-key-input" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-..." required maxlength="512"></label><label><span>OpenAI 模型</span><input id="api-model-input" list="openai-models" value="${escapeHtml(data.model || 'gpt-6-astra')}" maxlength="100" required><datalist id="openai-models"><option value="gpt-6-astra"><option value="gpt-5.6-sol"><option value="gpt-5.6-terra"><option value="gpt-5.6-luna"></datalist></label><div class="page-actions"><button class="button primary" type="submit">保存并测试</button>${data.source === 'session' ? '<button class="button danger" type="button" id="clear-api-config">清除会话配置</button>' : ''}</div></form><div class="notice danger">Key 不会写入浏览器存储、SQLite、日志或 Git。仅使用 OpenAI Responses API 可用的模型标识，推荐 gpt-6-astra。</div></section>`;
+      <div class="api-config-grid"><section class="panel"><div class="panel-title"><h3>连接状态</h3><span class="api-status-dot ${connectionClass}"></span></div><div class="api-facts"><div><span>配置状态</span><strong>${data.enabled ? '已保存' : '未配置'}</strong></div><div><span>连接验证</span><strong>${connectionLabel}</strong></div><div><span>服务商</span><strong>${escapeHtml(data.provider || '未配置')}</strong></div><div><span>当前模型</span><strong>${escapeHtml(data.model || '未配置')}</strong></div><div><span>接口协议</span><strong>${data.protocol === 'responses' ? 'Responses API' : data.protocol === 'chat_completions' ? 'Chat Completions' : '未配置'}</strong></div><div><span>最后测试</span><strong>${escapeHtml(data.last_tested_at ? data.last_tested_at.replace('T', ' ') : '尚未测试')}</strong></div></div>${data.enabled ? '<button class="button" id="test-api-connection">测试连接</button>' : ''}</section><section class="panel"><div class="panel-title"><h3>支持的分析任务</h3></div><div class="api-task-list">${taskRows}</div></section></div>
+      <section class="panel"><div class="panel-title"><div><h3>OpenAI 兼容 API 配置</h3><p>支持 OpenAI 官方及提供 OpenAI 兼容接口的国内服务商。Key 只保存在后端进程内存中。</p></div></div><form id="api-config-form" class="api-config-form provider-form" autocomplete="off"><label><span>服务商</span><select id="api-provider-input">${providerOptions}</select></label><label><span>API Key</span><input id="api-key-input" type="password" autocomplete="new-password" spellcheck="false" placeholder="输入所选服务商的 Key" required maxlength="512"></label><label><span>接口协议</span><select id="api-protocol-input"><option value="chat_completions" ${data.protocol !== 'responses' ? 'selected' : ''}>Chat Completions</option><option value="responses" ${data.protocol === 'responses' ? 'selected' : ''}>Responses API</option></select></label><label><span>接口地址</span><input id="api-endpoint-input" type="url" value="${escapeHtml(data.endpoint || aiProviderPresets.openai.url)}" placeholder="https://.../chat/completions" required maxlength="500"></label><label><span>模型 ID</span><input id="api-model-input" value="${escapeHtml(data.model || 'gpt-6-astra')}" maxlength="100" required></label><div class="page-actions"><button class="button primary" type="submit">保存并测试</button>${data.source === 'session' ? '<button class="button danger" type="button" id="clear-api-config">清除会话配置</button>' : ''}</div></form><div class="notice danger">必须使用服务商控制台提供的 Key、HTTPS 接口地址和模型 ID。不同平台的 Key 不能混用；测试连接不会发送案件资料。</div></section>`;
     $('#refresh-api-status').addEventListener('click', renderApiConfig);
+    $('#api-provider-input').addEventListener('change', event => {
+      const preset = aiProviderPresets[event.target.value];
+      $('#api-endpoint-input').value = preset.url;
+      $('#api-protocol-input').value = preset.protocol;
+      $('#api-model-input').value = preset.model;
+    });
     $('#test-api-connection')?.addEventListener('click', async event => {
       const button = event.currentTarget;
       button.disabled = true;
@@ -703,7 +724,8 @@ async function renderApiConfig() {
       submit.disabled = true;
       submit.textContent = '正在测试…';
       try {
-        await api('/api/ai/config', { method: 'POST', body: { api_key: $('#api-key-input').value, model: $('#api-model-input').value } });
+        const provider = aiProviderPresets[$('#api-provider-input').value]?.name || '自定义';
+        await api('/api/ai/config', { method: 'POST', body: { api_key: $('#api-key-input').value, model: $('#api-model-input').value, base_url: $('#api-endpoint-input').value, protocol: $('#api-protocol-input').value, provider } });
         $('#api-key-input').value = '';
         await api('/api/ai/test', { method: 'POST' });
         toast('配置已保存，OpenAI 连接正常');

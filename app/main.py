@@ -55,6 +55,9 @@ class AIAnalyzePayload(BaseModel):
 class AIConfigPayload(BaseModel):
     api_key: SecretStr
     model: str = "gpt-6-astra"
+    base_url: str = "https://api.openai.com/v1/responses"
+    protocol: str = "responses"
+    provider: str = "OpenAI"
 
 
 @app.on_event("startup")
@@ -192,7 +195,7 @@ def ai_status() -> dict:
 @app.post("/api/ai/config")
 def ai_config_update(payload: AIConfigPayload) -> dict:
     try:
-        return set_runtime_config(payload.api_key.get_secret_value(), payload.model)
+        return set_runtime_config(payload.api_key.get_secret_value(), payload.model, payload.base_url, payload.protocol, payload.provider)
     except AIServiceError as error:
         raise HTTPException(error.status_code, str(error)) from error
 

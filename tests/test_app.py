@@ -108,13 +108,21 @@ class ApplicationTests(unittest.TestCase):
     def test_runtime_ai_config_does_not_expose_or_persist_key(self):
         secret = "sk-local-test-secret"
         with patch.dict(os.environ, {"DISPUTE_EXPERT_AI_API_KEY": ""}, clear=False):
-            response = self.client.post("/api/ai/config", json={"api_key": secret, "model": "test-model"})
+            response = self.client.post("/api/ai/config", json={
+                "api_key": secret,
+                "model": "test-model",
+                "base_url": "https://api.openai.com/v1/responses",
+                "protocol": "responses",
+                "provider": "OpenAI 官方",
+            })
             self.assertEqual(response.status_code, 200)
             status = response.json()
             self.assertTrue(status["enabled"])
             self.assertEqual(status["model"], "test-model")
             self.assertEqual(status["source"], "session")
             self.assertEqual(status["connection_status"], "untested")
+            self.assertEqual(status["protocol"], "responses")
+            self.assertEqual(status["provider"], "OpenAI 官方")
             self.assertNotIn(secret, response.text)
             self.assertNotIn("api_key", response.text.lower())
 
@@ -127,25 +135,69 @@ class ApplicationTests(unittest.TestCase):
             invalid = self.client.post("/api/ai/config", json={"api_key": "", "model": "test model"})
             self.assertEqual(invalid.status_code, 422)
 
+            local_url = self.client.post("/api/ai/config", json={
+                "api_key": secret,
+                "model": "test-model",
+                "base_url": "https://127.0.0.1/v1/chat/completions",
+                "protocol": "chat_completions",
+                "provider": "自定义",
+            })
+            self.assertEqual(local_url.status_code, 422)
+
     def test_ai_connection_check_tracks_success_and_failure(self):
         class Response:
             def __enter__(self): return self
             def __exit__(self, *args): return False
             def read(self): return json.dumps({"output_text": "OK"}).encode("utf-8")
 
-        self.client.post("/api/ai/config", json={"api_key": "sk-test", "model": "test-model"})
-        with patch.object(ai_service, "urlopen", return_value=Response()):
+        self.client.post("/api/ai/config", json={
+            "api_key": "sk-test",
+            "model": "test-model",
+            "base_url": "https://api.openai.com/v1/responses",
+            "protocol": "responses",
+            "provider": "OpenAI 官方",
+        })
+        with patch.object(ai_service._http_opener, "open", return_value=Response()):
             result = self.client.post("/api/ai/test").json()
             self.assertEqual(result["connection_status"], "verified")
             self.assertNotIn("sk-test", json.dumps(result))
 
         from urllib.error import HTTPError
-        with patch.object(ai_service, "urlopen", side_effect=HTTPError("url", 404, "not found", {}, None)):
+        with patch.object(ai_service._http_opener, "open", side_effect=HTTPError("url", 404, "not found", {}, None)):
             response = self.client.post("/api/ai/test")
             self.assertEqual(response.status_code, 502)
             status = self.client.get("/api/ai/status").json()
             self.assertEqual(status["connection_status"], "failed")
-            self.assertIn("gpt-6-astra", status["connection_message"])
+            self.assertIn("接口协议", status["connection_message"])
+
+    def test_chat_completions_compatible_request_and_response(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                return json.dumps({"choices": [{"message": {"content": "兼容接口正常"}}]}).encode("utf-8")
+
+        matter = self.client.post("/api/matters", json={"title": "兼容接口测试"}).json()
+        with patch.object(ai_service.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 443))]):
+            configured = self.client.post("/api/ai/config", json={
+                "api_key": "domestic-test-key",
+                "model": "provider-model",
+                "base_url": "https://api.example.com/v1/chat/completions",
+                "protocol": "chat_completions",
+                "provider": "兼容服务",
+            })
+        self.assertEqual(configured.status_code, 200)
+        with patch.object(ai_service._http_opener, "open", return_value=Response()) as mocked:
+            result = self.client.post("/api/ai/analyze", json={"matter_id": matter["id"], "task": "risk_summary"}).json()
+            self.assertEqual(result["content"], "兼容接口正常")
+            body = json.loads(mocked.call_args.args[0].data.decode("utf-8"))
+            self.assertEqual(body["model"], "provider-model")
+            self.assertEqual(body["messages"][0]["role"], "system")
+            self.assertEqual(body["messages"][1]["role"], "user")
+            self.assertIn("案件上下文", body["messages"][1]["content"])
+            self.assertIn("max_tokens", body)
+            self.assertNotIn("input", body)
+        self.client.delete(f"/api/matters/{matter['id']}")
 
     def test_ai_request_uses_selected_citations_and_does_not_update_matter(self):
         matter = self.client.post("/api/matters", json={"title": "AI模拟测试"}).json()
@@ -160,7 +212,7 @@ class ApplicationTests(unittest.TestCase):
             def read(self): return json.dumps({"output_text": "风险摘要草稿"}).encode("utf-8")
 
         with patch.dict(os.environ, {"DISPUTE_EXPERT_AI_API_KEY": "test-key", "DISPUTE_EXPERT_AI_MODEL": "test-model"}, clear=False):
-            with patch.object(ai_service, "urlopen", return_value=Response()) as mocked:
+            with patch.object(ai_service._http_opener, "open", return_value=Response()) as mocked:
                 result = self.client.post(f"/api/ai/analyze", json={"matter_id": matter["id"], "task": "risk_summary", "selected_citations": ["case:001"]}).json()
                 self.assertTrue(result["enabled"])
                 self.assertEqual(result["content"], "风险摘要草稿")

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import socket
 from threading import Lock
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import uuid4
 
 
@@ -29,9 +31,20 @@ SYSTEM_PROMPT = """你是工程纠纷案件分析助手，不是律师，不直�
 _runtime_lock = Lock()
 _runtime_api_key = ""
 _runtime_model = ""
+_runtime_base_url = ""
+_runtime_protocol = ""
+_runtime_provider = ""
 _connection_status = "untested"
 _connection_message = "尚未测试连接。"
 _last_tested_at = ""
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_http_opener = build_opener(_NoRedirect)
 
 
 class AIServiceError(RuntimeError):
@@ -45,6 +58,8 @@ class AIConfig:
     api_key: str
     model: str
     base_url: str
+    protocol: str
+    provider: str
     reasoning_effort: str
     timeout: float
     max_output_tokens: int
@@ -58,6 +73,9 @@ def config() -> AIConfig:
     with _runtime_lock:
         runtime_api_key = _runtime_api_key
         runtime_model = _runtime_model
+        runtime_base_url = _runtime_base_url
+        runtime_protocol = _runtime_protocol
+        runtime_provider = _runtime_provider
     try:
         timeout = max(5.0, float(os.getenv("DISPUTE_EXPERT_AI_TIMEOUT", "60")))
     except ValueError:
@@ -69,7 +87,9 @@ def config() -> AIConfig:
     return AIConfig(
         api_key=runtime_api_key or os.getenv("DISPUTE_EXPERT_AI_API_KEY", "").strip(),
         model=runtime_model or os.getenv("DISPUTE_EXPERT_AI_MODEL", "gpt-6-astra").strip() or "gpt-6-astra",
-        base_url=os.getenv("DISPUTE_EXPERT_AI_BASE_URL", "https://api.openai.com/v1/responses").strip(),
+        base_url=runtime_base_url or os.getenv("DISPUTE_EXPERT_AI_BASE_URL", "https://api.openai.com/v1/responses").strip(),
+        protocol=runtime_protocol or os.getenv("DISPUTE_EXPERT_AI_PROTOCOL", "responses").strip() or "responses",
+        provider=runtime_provider or os.getenv("DISPUTE_EXPERT_AI_PROVIDER", "OpenAI").strip() or "OpenAI",
         reasoning_effort=os.getenv("DISPUTE_EXPERT_AI_REASONING_EFFORT", "low").strip() or "low",
         timeout=timeout,
         max_output_tokens=max_output_tokens,
@@ -86,6 +106,9 @@ def public_status() -> dict:
     return {
         "enabled": settings.enabled,
         "model": settings.model if settings.enabled else None,
+        "protocol": settings.protocol if settings.enabled else None,
+        "provider": settings.provider if settings.enabled else None,
+        "endpoint": settings.base_url if settings.enabled else None,
         "source": source,
         "connection_status": connection_status,
         "connection_message": connection_message,
@@ -94,17 +117,46 @@ def public_status() -> dict:
     }
 
 
-def set_runtime_config(api_key: str, model: str = "") -> dict:
+def _validate_endpoint(base_url: str) -> str:
+    value = base_url.strip()
+    try:
+        parsed = urlsplit(value)
+    except ValueError as error:
+        raise AIServiceError("接口地址格式不正确。", 422) from error
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise AIServiceError("接口地址必须是无账号、查询参数和片段的公网 HTTPS 地址。", 422)
+    if parsed.hostname.lower() == "localhost":
+        raise AIServiceError("接口地址不能指向本机或局域网。", 422)
+    try:
+        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as error:
+        raise AIServiceError("接口域名无法解析，请检查服务商地址。", 422) from error
+    for address in addresses:
+        ip = ipaddress.ip_address(address[4][0])
+        if not ip.is_global:
+            raise AIServiceError("接口地址不能指向本机、局域网或保留网络。", 422)
+    return value.rstrip("/")
+
+
+def set_runtime_config(api_key: str, model: str = "", base_url: str = "", protocol: str = "chat_completions", provider: str = "自定义") -> dict:
     key = api_key.strip()
     if not key or len(key) > 512:
         raise AIServiceError("请输入有效的 OpenAI API Key。", 422)
     selected_model = model.strip() or "gpt-6-astra"
     if len(selected_model) > 100 or any(char.isspace() for char in selected_model):
         raise AIServiceError("模型名称格式不正确。", 422)
-    global _runtime_api_key, _runtime_model, _connection_status, _connection_message, _last_tested_at
+    selected_protocol = protocol.strip()
+    if selected_protocol not in {"responses", "chat_completions"}:
+        raise AIServiceError("接口协议必须是 Responses API 或 Chat Completions。", 422)
+    selected_url = _validate_endpoint(base_url or ("https://api.openai.com/v1/responses" if selected_protocol == "responses" else "https://api.openai.com/v1/chat/completions"))
+    selected_provider = provider.strip()[:60] or "自定义"
+    global _runtime_api_key, _runtime_model, _runtime_base_url, _runtime_protocol, _runtime_provider, _connection_status, _connection_message, _last_tested_at
     with _runtime_lock:
         _runtime_api_key = key
         _runtime_model = selected_model
+        _runtime_base_url = selected_url
+        _runtime_protocol = selected_protocol
+        _runtime_provider = selected_provider
         _connection_status = "untested"
         _connection_message = "配置已保存，请测试连接。"
         _last_tested_at = ""
@@ -112,10 +164,13 @@ def set_runtime_config(api_key: str, model: str = "") -> dict:
 
 
 def clear_runtime_config() -> dict:
-    global _runtime_api_key, _runtime_model, _connection_status, _connection_message, _last_tested_at
+    global _runtime_api_key, _runtime_model, _runtime_base_url, _runtime_protocol, _runtime_provider, _connection_status, _connection_message, _last_tested_at
     with _runtime_lock:
         _runtime_api_key = ""
         _runtime_model = ""
+        _runtime_base_url = ""
+        _runtime_protocol = ""
+        _runtime_provider = ""
         _connection_status = "untested"
         _connection_message = "尚未测试连接。"
         _last_tested_at = ""
@@ -138,15 +193,17 @@ def _request_json(settings: AIConfig, body: dict) -> dict:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=settings.timeout) as response:
+        with _http_opener.open(request, timeout=settings.timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
         if error.code == 401:
-            raise AIServiceError("AI 认证失败，请检查 OpenAI API Key。", 502) from error
+            raise AIServiceError("AI 认证失败，请检查所选服务商的 API Key。", 502) from error
         if error.code == 429:
             raise AIServiceError("AI 请求受到限流或账户额度不足，请检查账户后重试。", 429) from error
         if error.code in {400, 404}:
-            raise AIServiceError(f"模型 {settings.model} 不可用或请求格式不受支持，请改用 gpt-6-astra 后重试。", 502) from error
+            raise AIServiceError(f"模型 {settings.model} 不可用或接口协议不匹配，请核对服务商、模型名称和协议。", 502) from error
+        if 300 <= error.code < 400:
+            raise AIServiceError("服务商接口发生重定向，请填写最终的 HTTPS API 地址。", 502) from error
         raise AIServiceError(f"AI 服务暂时不可用（HTTP {error.code}）。", 502) from error
     except (URLError, TimeoutError, socket.timeout) as error:
         raise AIServiceError("AI 请求超时或网络不可用，本地功能不受影响。", 504) from error
@@ -159,11 +216,7 @@ def test_connection() -> dict:
     if not settings.enabled:
         raise AIServiceError("请先保存 OpenAI API Key。", 422)
     try:
-        payload = _request_json(settings, {
-            "model": settings.model,
-            "input": "仅回复 OK。",
-            "max_output_tokens": 32,
-        })
+        payload = _request_json(settings, _request_body(settings, "仅回复 OK。", 32))
         if not _extract_text(payload):
             raise AIServiceError("模型未返回测试文本。", 502)
     except AIServiceError as error:
@@ -215,6 +268,11 @@ def build_context(matter: dict, selected_citations: list[str] | None = None) -> 
 
 
 def _extract_text(payload: dict) -> str:
+    choices = payload.get("choices") or []
+    if choices:
+        content = (choices[0].get("message") or {}).get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
     if isinstance(payload.get("output_text"), str) and payload["output_text"].strip():
         return payload["output_text"].strip()
     pieces = []
@@ -229,6 +287,20 @@ def _extract_text(payload: dict) -> str:
     return text
 
 
+def _request_body(settings: AIConfig, user_input: str, max_output_tokens: int, instructions: str = "") -> dict:
+    if settings.protocol == "chat_completions":
+        messages = []
+        if instructions:
+            messages.append({"role": "system", "content": instructions})
+        messages.append({"role": "user", "content": user_input})
+        return {"model": settings.model, "messages": messages, "max_tokens": max_output_tokens}
+    body = {"model": settings.model, "input": user_input, "max_output_tokens": max_output_tokens}
+    if instructions:
+        body["instructions"] = instructions
+        body["reasoning"] = {"effort": settings.reasoning_effort}
+    return body
+
+
 def analyze(matter: dict, task: str, selected_citations: list[str] | None = None, user_instruction: str = "") -> dict:
     if task not in TASKS:
         raise AIServiceError("不支持的 AI 分析任务。", 422)
@@ -237,13 +309,8 @@ def analyze(matter: dict, task: str, selected_citations: list[str] | None = None
         return {"enabled": False, "message": "AI分析未启用；本地知识库和案件工作台仍可正常使用。"}
     context, citations, warnings = build_context(matter, selected_citations)
     instruction = _clip(user_instruction, 1200) or "请完成本次分析，并明确列出资料缺口和人工核验事项。"
-    request_body = {
-        "model": settings.model,
-        "instructions": SYSTEM_PROMPT,
-        "input": f"任务：{TASKS[task]}\n用户补充要求：{instruction}\n案件上下文（仅限以下资料）：\n{json.dumps(context, ensure_ascii=False)}",
-        "reasoning": {"effort": settings.reasoning_effort},
-        "max_output_tokens": settings.max_output_tokens,
-    }
+    user_input = f"任务：{TASKS[task]}\n用户补充要求：{instruction}\n案件上下文（仅限以下资料）：\n{json.dumps(context, ensure_ascii=False)}"
+    request_body = _request_body(settings, user_input, settings.max_output_tokens, SYSTEM_PROMPT)
     request_id = uuid4().hex[:12]
     payload = _request_json(settings, request_body)
     return {
