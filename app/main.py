@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -12,6 +11,7 @@ from .data_loader import KnowledgeBase
 from .database import add_citation, create_matter, delete_matter, get_matter, init_db, list_matters, update_matter
 from .exporter import build_markdown
 from .search import search_documents
+from .ai_service import AIServiceError, analyze as analyze_ai, public_status
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +45,13 @@ class ExportPayload(BaseModel):
     audience: str = "internal"
 
 
+class AIAnalyzePayload(BaseModel):
+    matter_id: str
+    task: str = "risk_summary"
+    selected_citations: list[str] = Field(default_factory=list, max_length=50)
+    user_instruction: str = Field(default="", max_length=1200)
+
+
 @app.on_event("startup")
 def startup() -> None:
     global kb
@@ -66,7 +73,7 @@ def meta() -> dict:
         "readable_case_count": sum(bool(item.body.strip()) for item in store.cases),
         "institution_count": len(store.institutions),
         "topics": store.topics,
-        "ai_enabled": bool(os.environ.get("DISPUTE_EXPERT_AI_ENDPOINT")),
+        "ai_enabled": public_status()["enabled"],
     }
 
 
@@ -172,11 +179,20 @@ def matter_export(matter_id: str, payload: ExportPayload):
     )
 
 
+@app.get("/api/ai/status")
+def ai_status() -> dict:
+    return public_status()
+
+
 @app.post("/api/ai/analyze")
-def ai_analyze() -> dict:
-    if not os.environ.get("DISPUTE_EXPERT_AI_ENDPOINT"):
-        return {"enabled": False, "message": "AI分析尚未启用；离线检索、案件工作台和报告导出可正常使用。"}
-    return {"enabled": True, "message": "AI接口已配置，但首版仅预留调用边界。"}
+def ai_analyze(payload: AIAnalyzePayload) -> dict:
+    matter = get_matter(payload.matter_id)
+    if not matter:
+        raise HTTPException(404, "案件不存在")
+    try:
+        return analyze_ai(matter, payload.task, payload.selected_citations, payload.user_instruction)
+    except AIServiceError as error:
+        raise HTTPException(error.status_code, str(error)) from error
 
 
 @app.get("/favicon.ico", include_in_schema=False)

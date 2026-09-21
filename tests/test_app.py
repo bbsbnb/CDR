@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import unittest
+import json
+import os
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app import ai_service
 
 
 class ApplicationTests(unittest.TestCase):
@@ -87,6 +91,42 @@ class ApplicationTests(unittest.TestCase):
         self.assertNotIn("内部整改文本", external)
         self.assertIn("结算程序约定", external)
         self.client.delete(f"/api/matters/{matter_id}")
+
+    def test_ai_disabled_status_and_missing_matter(self):
+        with patch.dict(os.environ, {"DISPUTE_EXPERT_AI_API_KEY": ""}, clear=False):
+            status = self.client.get("/api/ai/status").json()
+            self.assertFalse(status["enabled"])
+            matter = self.client.post("/api/matters", json={"title": "AI关闭测试"}).json()
+            result = self.client.post("/api/ai/analyze", json={"matter_id": matter["id"], "task": "risk_summary"}).json()
+            self.assertFalse(result["enabled"])
+            self.client.delete(f"/api/matters/{matter['id']}")
+        self.assertEqual(self.client.post("/api/ai/analyze", json={"matter_id": "missing", "task": "risk_summary"}).status_code, 404)
+
+    def test_ai_request_uses_selected_citations_and_does_not_update_matter(self):
+        matter = self.client.post("/api/matters", json={"title": "AI模拟测试"}).json()
+        matter["sections"] = {"company": {"concession": "不能发送的内部底线"}, "gaps": [{"priority": "必须补", "item": "合同", "action": "补齐"}]}
+        matter = self.client.put(f"/api/matters/{matter['id']}", json=matter).json()
+        self.client.post(f"/api/matters/{matter['id']}/citations", json={"library_type": "案例", "doc_id": "001", "title": "案例一", "source_label": "行业经验素材"})
+        self.client.post(f"/api/matters/{matter['id']}/citations", json={"library_type": "公司制度", "doc_id": "021", "title": "制度二十一", "source_label": "制度版本段"})
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return json.dumps({"output_text": "风险摘要草稿"}).encode("utf-8")
+
+        with patch.dict(os.environ, {"DISPUTE_EXPERT_AI_API_KEY": "test-key", "DISPUTE_EXPERT_AI_MODEL": "test-model"}, clear=False):
+            with patch.object(ai_service, "urlopen", return_value=Response()) as mocked:
+                result = self.client.post(f"/api/ai/analyze", json={"matter_id": matter["id"], "task": "risk_summary", "selected_citations": ["case:001"]}).json()
+                self.assertTrue(result["enabled"])
+                self.assertEqual(result["content"], "风险摘要草稿")
+                self.assertEqual([item["doc_id"] for item in result["citations"]], ["001"])
+                body = json.loads(mocked.call_args.args[0].data.decode("utf-8"))
+                self.assertIn("案件上下文", body["input"])
+                self.assertNotIn("不能发送的内部底线", body["input"])
+                self.assertEqual(body["model"], "test-model")
+        restored = self.client.get(f"/api/matters/{matter['id']}").json()
+        self.assertEqual(restored["sections"]["company"]["concession"], "不能发送的内部底线")
+        self.client.delete(f"/api/matters/{matter['id']}")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ const state = {
   currentMatterId: localStorage.getItem('currentMatterId') || '',
   analyzerStep: 1,
   reportAudience: 'internal',
+  aiDraft: null,
   library: { cases: { q: '', topic: '', limit: 40, page: 1, sort: 'relevance', view: 'list', favoritesOnly: false, numberRange: '', category: 'all' }, institutions: { q: '', topic: '', limit: 40 } },
   favorites: JSON.parse(localStorage.getItem('caseFavorites') || '[]'),
   toolkit: JSON.parse(localStorage.getItem('toolkitState') || 'null') || {},
@@ -414,9 +415,65 @@ function renderAnalyzer() {
     <div class="analyzer-layout">
       <nav class="panel step-nav">${stepNames.map((name, index) => `<button class="step-button ${state.analyzerStep === index + 1 ? 'active' : ''} ${index + 1 < state.matter.current_step ? 'complete' : ''}" data-step="${index + 1}">${index + 1}. ${name}</button>`).join('')}</nav>
       <section class="analysis-main">${renderAnalyzerStep()}</section>
-      <aside class="panel analysis-aside"><div class="completion-ring" style="--p:${completion}"><span>${completion}%</span></div><div class="panel-title"><h3>案件摘要</h3></div><div class="aside-list"><div><b>阶段：</b>${escapeHtml(state.matter.stage || '未填写')}</div><div><b>金额：</b>${escapeHtml(state.matter.amount || '未填写')}</div><div><b>引用：</b>${state.matter.citations.length} 条</div><div><b>制度授权门槛：</b>待公司配置</div></div></aside>
+      <aside class="panel analysis-aside"><div class="completion-ring" style="--p:${completion}"><span>${completion}%</span></div><div class="panel-title"><h3>案件摘要</h3></div><div class="aside-list"><div><b>阶段：</b>${escapeHtml(state.matter.stage || '未填写')}</div><div><b>金额：</b>${escapeHtml(state.matter.amount || '未填写')}</div><div><b>引用：</b>${state.matter.citations.length} 条</div><div><b>制度授权门槛：</b>待公司配置</div></div>${renderAiPanel()}</aside>
     </div>`;
   bindAnalyzer();
+}
+
+function renderAiPanel() {
+  const draft = state.aiDraft?.matter_id === state.matter.id ? state.aiDraft : null;
+  return `<section class="ai-panel" aria-label="AI辅助分析"><div class="ai-panel-heading"><h3>AI 辅助分析</h3><span id="ai-status">读取状态中…</span></div><p class="ai-disclaimer">仅发送当前案件摘要、已填写分析内容和已选依据。结果是 AI 草稿，需人工和律师核验。</p><div class="ai-controls"><select id="ai-task"><option value="risk_summary">风险摘要与补证</option><option value="evidence_review">证据链缺口核验</option><option value="liability_draft">责任区间草稿</option><option value="solution_options">处理路径比较</option><option value="report_draft">七段式报告草稿</option></select><button class="button primary" id="run-ai-analysis">AI 分析</button></div><button class="ai-context-button" id="view-ai-context">查看发送范围</button><div class="ai-context hidden" id="ai-context"><b>将发送：</b>案件摘要、当前已填写字段、资料缺口、风险扫描、证据链、金额测算、期限事项和已加入依据编号。</div><div class="ai-result ${draft ? '' : 'hidden'}" id="ai-result"><div class="ai-result-meta">${draft ? `任务：${escapeHtml(draft.task)} · 模型：${escapeHtml(draft.model || '未启用')} · ${escapeHtml(draft.created_at || '')}` : ''}</div><div class="ai-result-content">${draft ? nl2br(draft.content) : ''}</div>${draft ? `<div class="ai-warnings">${draft.warnings.map(item => `<div>提示：${escapeHtml(item)}</div>`).join('')}</div>` : ''}</div></section>`;
+}
+
+async function loadAiStatus() {
+  const status = $('#ai-status');
+  const button = $('#run-ai-analysis');
+  if (!status || !button) return;
+  try {
+    const data = await api('/api/ai/status');
+    status.textContent = data.enabled ? `已启用 · ${data.model}` : '未启用';
+    status.className = data.enabled ? 'ai-state enabled' : 'ai-state';
+    button.disabled = !data.enabled;
+  } catch {
+    status.textContent = '状态不可用';
+    status.className = 'ai-state';
+    button.disabled = true;
+  }
+}
+
+function bindAiPanel() {
+  $('#view-ai-context')?.addEventListener('click', () => $('#ai-context').classList.toggle('hidden'));
+  $('#run-ai-analysis')?.addEventListener('click', event => requestAiDraft($('#ai-task').value, '', event.currentTarget));
+  loadAiStatus();
+}
+
+async function requestAiDraft(task, userInstruction = '', trigger = null) {
+    const button = $('#run-ai-analysis');
+    const result = $('#ai-result');
+    if (trigger) trigger.disabled = true;
+    if (button) button.textContent = '分析中…';
+    if (result) {
+      result.classList.remove('hidden');
+      result.innerHTML = '<div class="ai-loading">正在请求 AI，原有案件内容不会被覆盖。</div>';
+    }
+    try {
+      const selected = state.matter.citations.map(item => `${item.library_type === '案例' ? 'case' : 'institution'}:${item.doc_id}`);
+      const data = await api('/api/ai/analyze', { method: 'POST', body: { matter_id: state.matter.id, task, selected_citations: selected, user_instruction: userInstruction } });
+      if (!data.enabled) throw new Error(data.message);
+      state.aiDraft = data;
+      renderAnalyzer();
+      toast('AI 草稿已生成，未修改案件字段');
+    } catch (error) {
+      if (result) result.innerHTML = `<div class="ai-error">${escapeHtml(error.message)}</div>`;
+    } finally {
+      if (trigger) trigger.disabled = false;
+      if (button) button.textContent = 'AI 分析';
+    }
+}
+
+function bindReportAi() {
+  $('#ai-internal-report')?.addEventListener('click', event => requestAiDraft('report_draft', '', event.currentTarget));
+  $('#ai-external-report')?.addEventListener('click', event => requestAiDraft('report_draft', '请只生成对外沟通稿，排除公司处理意见、让步底线、授权层级、内部审批、内部追责和内部整改。', event.currentTarget));
 }
 
 function calculateCompletion() {
@@ -495,7 +552,8 @@ function renderReport() {
     { library_type: '项目合同', doc_id: '', source_label: '' },
     { library_type: '现行法律', doc_id: '', source_label: '' },
   ]);
-  return stepPanel('七段式报告与依据', '内部完整报告包含公司意见；对外沟通稿自动剔除内部敏感内容。', `<div class="panel-title"><div><h3>合同与法律依据</h3><p>正式援引法律前须核对现行有效版本。</p></div></div>${tableEditor('manual_citations', ['来源', '条款/编号', '具体依据'], ['library_type', 'doc_id', 'source_label'], manual, { library_type: ['项目合同', '现行法律'] })}<div class="report-tabs" style="margin-top:16px"><button class="report-tab ${state.reportAudience === 'internal' ? 'active' : ''}" data-audience="internal">内部完整报告</button><button class="report-tab ${state.reportAudience === 'external' ? 'active' : ''}" data-audience="external">对外沟通稿</button></div><div class="page-actions" style="margin-bottom:10px"><button class="button" id="refresh-report">刷新预览</button><button class="button" id="download-report">导出 Markdown</button><button class="button" id="print-report">打印 / PDF</button></div><div class="report-preview" id="report-preview">正在生成预览…</div><div class="panel" style="margin-top:12px"><div class="panel-title"><h3>从知识库加入的依据</h3></div>${state.matter.citations.length ? state.matter.citations.map(item => `<div class="fact"><span>${escapeHtml(item.library_type)} ${escapeHtml(item.doc_id)}</span><strong>${escapeHtml(item.source_label)}</strong></div>`).join('') : '<div class="empty-state"><b>尚未加入知识库依据</b>从案例库或制度库详情页加入当前案件。</div>'}</div>`);
+  const draft = state.aiDraft?.matter_id === state.matter.id ? state.aiDraft : null;
+  return stepPanel('七段式报告与依据', '内部完整报告包含公司意见；对外沟通稿自动剔除内部敏感内容。', `<div class="panel-title"><div><h3>合同与法律依据</h3><p>正式援引法律前须核对现行有效版本。</p></div></div>${tableEditor('manual_citations', ['来源', '条款/编号', '具体依据'], ['library_type', 'doc_id', 'source_label'], manual, { library_type: ['项目合同', '现行法律'] })}<div class="report-tabs" style="margin-top:16px"><button class="report-tab ${state.reportAudience === 'internal' ? 'active' : ''}" data-audience="internal">内部完整报告</button><button class="report-tab ${state.reportAudience === 'external' ? 'active' : ''}" data-audience="external">对外沟通稿</button></div><div class="page-actions" style="margin-bottom:10px"><button class="button" id="refresh-report">刷新预览</button><button class="button" id="download-report">导出 Markdown</button><button class="button" id="print-report">打印 / PDF</button><button class="button primary" id="ai-internal-report">AI 生成内部草稿</button><button class="button" id="ai-external-report">AI 生成对外草稿</button></div><div class="report-preview" id="report-preview">正在生成预览…</div>${draft ? `<div class="ai-result" id="ai-result"><div class="ai-result-meta">AI 草稿 · ${escapeHtml(draft.model || '')}</div><div class="ai-result-content">${nl2br(draft.content)}</div><div class="ai-warnings">${draft.warnings.map(item => `<div>提示：${escapeHtml(item)}</div>`).join('')}</div></div>` : ''}<div class="panel" style="margin-top:12px"><div class="panel-title"><h3>从知识库加入的依据</h3></div>${state.matter.citations.length ? state.matter.citations.map(item => `<div class="fact"><span>${escapeHtml(item.library_type)} ${escapeHtml(item.doc_id)}</span><strong>${escapeHtml(item.source_label)}</strong></div>`).join('') : '<div class="empty-state"><b>尚未加入知识库依据</b>从案例库或制度库详情页加入当前案件。</div>'}</div>`);
 }
 
 function tableEditor(path, headers, keys, rows, options = {}) {
@@ -554,6 +612,8 @@ function bindAnalyzer() {
   $('#download-report')?.addEventListener('click', downloadReport);
   $('#print-report')?.addEventListener('click', () => window.print());
   if (state.analyzerStep === 9) loadReportPreview();
+  bindAiPanel();
+  bindReportAi();
 }
 
 async function saveMatter(showToast = false) {
