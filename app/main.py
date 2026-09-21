@@ -53,7 +53,7 @@ class AIAnalyzePayload(BaseModel):
 
 
 class AIConfigPayload(BaseModel):
-    api_key: SecretStr
+    api_key: SecretStr = SecretStr("")
     model: str = "gpt-6-astra"
     base_url: str = "https://api.openai.com/v1/responses"
     protocol: str = "responses"

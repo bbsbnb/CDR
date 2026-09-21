@@ -139,7 +139,10 @@ def _validate_endpoint(base_url: str) -> str:
 
 
 def set_runtime_config(api_key: str, model: str = "", base_url: str = "", protocol: str = "chat_completions", provider: str = "自定义") -> dict:
-    key = api_key.strip()
+    global _runtime_api_key, _runtime_model, _runtime_base_url, _runtime_protocol, _runtime_provider, _connection_status, _connection_message, _last_tested_at
+    with _runtime_lock:
+        existing_key = _runtime_api_key
+    key = api_key.strip() or existing_key or os.getenv("DISPUTE_EXPERT_AI_API_KEY", "").strip()
     if not key or len(key) > 512:
         raise AIServiceError("请输入有效的 OpenAI API Key。", 422)
     selected_model = model.strip() or "gpt-6-astra"
@@ -150,7 +153,6 @@ def set_runtime_config(api_key: str, model: str = "", base_url: str = "", protoc
         raise AIServiceError("接口协议必须是 Responses API 或 Chat Completions。", 422)
     selected_url = _validate_endpoint(base_url or ("https://api.openai.com/v1/responses" if selected_protocol == "responses" else "https://api.openai.com/v1/chat/completions"))
     selected_provider = provider.strip()[:60] or "自定义"
-    global _runtime_api_key, _runtime_model, _runtime_base_url, _runtime_protocol, _runtime_provider, _connection_status, _connection_message, _last_tested_at
     with _runtime_lock:
         _runtime_api_key = key
         _runtime_model = selected_model
@@ -200,7 +202,7 @@ def _request_json(settings: AIConfig, body: dict) -> dict:
             raise AIServiceError("AI 认证失败，请检查所选服务商的 API Key。", 502) from error
         if error.code == 429:
             raise AIServiceError("AI 请求受到限流或账户额度不足，请检查账户后重试。", 429) from error
-        if error.code in {400, 404}:
+        if error.code in {400, 404, 422}:
             raise AIServiceError(f"模型 {settings.model} 不可用或接口协议不匹配，请核对服务商、模型名称和协议。", 502) from error
         if 300 <= error.code < 400:
             raise AIServiceError("服务商接口发生重定向，请填写最终的 HTTPS API 地址。", 502) from error

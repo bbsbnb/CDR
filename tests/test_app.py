@@ -128,6 +128,17 @@ class ApplicationTests(unittest.TestCase):
 
             fetched = self.client.get("/api/ai/status")
             self.assertNotIn(secret, fetched.text)
+            with patch.object(ai_service.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 443))]):
+                reused = self.client.post("/api/ai/config", json={
+                    "api_key": "",
+                    "model": "deepseek-chat",
+                    "base_url": "https://api.deepseek.com/chat/completions",
+                    "protocol": "chat_completions",
+                    "provider": "DeepSeek",
+                })
+            self.assertEqual(reused.status_code, 200)
+            self.assertEqual(reused.json()["model"], "deepseek-chat")
+            self.assertNotIn(secret, reused.text)
             cleared = self.client.delete("/api/ai/config").json()
             self.assertFalse(cleared["enabled"])
             self.assertEqual(cleared["source"], "none")
@@ -169,6 +180,11 @@ class ApplicationTests(unittest.TestCase):
             status = self.client.get("/api/ai/status").json()
             self.assertEqual(status["connection_status"], "failed")
             self.assertIn("接口协议", status["connection_message"])
+
+        with patch.object(ai_service._http_opener, "open", side_effect=HTTPError("url", 422, "unprocessable", {}, None)):
+            response = self.client.post("/api/ai/test")
+            self.assertEqual(response.status_code, 502)
+            self.assertIn("接口协议不匹配", response.json()["detail"])
 
     def test_chat_completions_compatible_request_and_response(self):
         class Response:
