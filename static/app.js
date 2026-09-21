@@ -671,15 +671,37 @@ function renderToolkit() {
 
 async function renderApiConfig() {
   setPage('api-config');
-  app.innerHTML = '<div class="panel"><div class="panel-title"><div><h2>API 配置</h2><p>大模型调用仅由本机后端代理，浏览器不会接触 API Key。</p></div><span class="ai-state">读取状态中…</span></div><div class="empty-state">正在读取本机 AI 配置状态…</div></div>';
+  app.innerHTML = '<div class="panel"><div class="panel-title"><div><h2>API 配置</h2><p>大模型调用仅由本机后端代理。</p></div><span class="ai-state">读取状态中…</span></div><div class="empty-state">正在读取本机 AI 配置状态…</div></div>';
   try {
     const data = await api('/api/ai/status');
     const taskRows = Object.entries(data.tasks || {}).map(([key, label]) => `<div class="api-task"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(key)}</span></div>`).join('');
+    const source = data.source === 'session' ? '当前服务会话' : data.source === 'environment' ? '本机环境变量' : '未配置';
     app.innerHTML = `<div class="page-head"><div><h2>API 配置</h2><p>管理本机大模型调用状态与安全配置</p></div><button class="button" id="refresh-api-status">刷新状态</button></div>
       <div class="notice ${data.enabled ? 'info' : ''}"><b>${data.enabled ? 'AI 已启用' : 'AI 未启用'}</b> · ${data.enabled ? `当前模型：${escapeHtml(data.model || '未返回')}` : '本地案例库、制度库、案件工作台和报告导出不受影响。'}</div>
-      <div class="api-config-grid"><section class="panel"><div class="panel-title"><h3>连接状态</h3><span class="api-status-dot ${data.enabled ? 'on' : ''}"></span></div><div class="api-facts"><div><span>启用状态</span><strong>${data.enabled ? '已启用' : '未启用'}</strong></div><div><span>当前模型</span><strong>${escapeHtml(data.model || '未配置')}</strong></div><div><span>调用方式</span><strong>本机 FastAPI 后端代理</strong></div><div><span>数据范围</span><strong>当前案件摘要与已选依据</strong></div></div></section><section class="panel"><div class="panel-title"><h3>支持的分析任务</h3></div><div class="api-task-list">${taskRows}</div></section></div>
-      <section class="panel"><div class="panel-title"><div><h3>本机配置方式</h3><p>API Key 不在页面输入、不写入前端、不保存到 SQLite。</p></div></div><div class="api-code">$env:DISPUTE_EXPERT_AI_API_KEY = "你的 API Key"<br>$env:DISPUTE_EXPERT_AI_MODEL = "gpt-6-astra"<br>.\\run.ps1</div><div class="notice danger">请勿把 API Key 写入 Git 仓库、截图、案件正文或浏览器存储。模型输出仅为 AI 草稿，仍需人工和律师核验。</div></section>`;
+      <div class="api-config-grid"><section class="panel"><div class="panel-title"><h3>连接状态</h3><span class="api-status-dot ${data.enabled ? 'on' : ''}"></span></div><div class="api-facts"><div><span>启用状态</span><strong>${data.enabled ? '已启用' : '未启用'}</strong></div><div><span>当前模型</span><strong>${escapeHtml(data.model || '未配置')}</strong></div><div><span>配置来源</span><strong>${source}</strong></div><div><span>数据范围</span><strong>当前案件摘要与已选依据</strong></div></div></section><section class="panel"><div class="panel-title"><h3>支持的分析任务</h3></div><div class="api-task-list">${taskRows}</div></section></div>
+      <section class="panel"><div class="panel-title"><div><h3>自定义 OpenAI Key</h3><p>Key 仅发送到本机 127.0.0.1 服务并保存在进程内存中，重启服务后自动清除。</p></div></div><form id="api-config-form" class="api-config-form" autocomplete="off"><label><span>OpenAI API Key</span><input id="api-key-input" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-..." required maxlength="512"></label><label><span>模型</span><input id="api-model-input" value="${escapeHtml(data.model || 'gpt-6-astra')}" maxlength="100" required></label><div class="page-actions"><button class="button primary" type="submit">保存并启用</button>${data.source === 'session' ? '<button class="button danger" type="button" id="clear-api-config">清除会话配置</button>' : ''}</div></form><div class="notice danger">Key 不会写入浏览器存储、SQLite、日志或 Git，但保存时会通过本机 HTTP 请求传给后端。不要在公共网络环境暴露本服务。</div></section>`;
     $('#refresh-api-status').addEventListener('click', renderApiConfig);
+    $('#api-config-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const submit = event.currentTarget.querySelector('[type="submit"]');
+      submit.disabled = true;
+      submit.textContent = '正在启用…';
+      try {
+        await api('/api/ai/config', { method: 'POST', body: { api_key: $('#api-key-input').value, model: $('#api-model-input').value } });
+        $('#api-key-input').value = '';
+        toast('AI 会话配置已启用');
+        await renderApiConfig();
+      } catch (error) {
+        submit.disabled = false;
+        submit.textContent = '保存并启用';
+        toast(`配置失败：${error.message}`);
+      }
+    });
+    $('#clear-api-config')?.addEventListener('click', async () => {
+      await api('/api/ai/config', { method: 'DELETE' });
+      toast('会话配置已清除');
+      await renderApiConfig();
+    });
   } catch (error) {
     app.innerHTML = `<div class="empty-state"><b>配置状态读取失败</b>${escapeHtml(error.message)}<br><button class="button" id="retry-api-status">重试</button></div>`;
     $('#retry-api-status').addEventListener('click', renderApiConfig);

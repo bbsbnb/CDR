@@ -5,13 +5,13 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from .data_loader import KnowledgeBase
 from .database import add_citation, create_matter, delete_matter, get_matter, init_db, list_matters, update_matter
 from .exporter import build_markdown
 from .search import search_documents
-from .ai_service import AIServiceError, analyze as analyze_ai, public_status
+from .ai_service import AIServiceError, analyze as analyze_ai, clear_runtime_config, public_status, set_runtime_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +50,11 @@ class AIAnalyzePayload(BaseModel):
     task: str = "risk_summary"
     selected_citations: list[str] = Field(default_factory=list, max_length=50)
     user_instruction: str = Field(default="", max_length=1200)
+
+
+class AIConfigPayload(BaseModel):
+    api_key: SecretStr
+    model: str = "gpt-6-astra"
 
 
 @app.on_event("startup")
@@ -182,6 +187,19 @@ def matter_export(matter_id: str, payload: ExportPayload):
 @app.get("/api/ai/status")
 def ai_status() -> dict:
     return public_status()
+
+
+@app.post("/api/ai/config")
+def ai_config_update(payload: AIConfigPayload) -> dict:
+    try:
+        return set_runtime_config(payload.api_key.get_secret_value(), payload.model)
+    except AIServiceError as error:
+        raise HTTPException(error.status_code, str(error)) from error
+
+
+@app.delete("/api/ai/config")
+def ai_config_delete() -> dict:
+    return clear_runtime_config()
 
 
 @app.post("/api/ai/analyze")

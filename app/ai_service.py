@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+from threading import Lock
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
@@ -24,6 +25,10 @@ SYSTEM_PROMPT = """你是工程纠纷案件分析助手，不是律师，不直�
 金额只能输出区间、口径和假设。制度必须带编号和版本状态。案例必须标明“行业经验素材，不是法律法规或裁判文书”。
 法律现行状态无法由当前资料确认时，必须提示人工或律师核验。输出必须包含：结论摘要、事实依据、资料缺口、风险等级与理由、责任分析、金额区间和测算假设、可选处理路径、待人工核验事项、使用的依据编号。
 只使用用户提供的案件上下文和已选依据，不要声称读取了其他本地文件。"""
+
+_runtime_lock = Lock()
+_runtime_api_key = ""
+_runtime_model = ""
 
 
 class AIServiceError(RuntimeError):
@@ -47,6 +52,9 @@ class AIConfig:
 
 
 def config() -> AIConfig:
+    with _runtime_lock:
+        runtime_api_key = _runtime_api_key
+        runtime_model = _runtime_model
     try:
         timeout = max(5.0, float(os.getenv("DISPUTE_EXPERT_AI_TIMEOUT", "60")))
     except ValueError:
@@ -56,8 +64,8 @@ def config() -> AIConfig:
     except ValueError:
         max_output_tokens = 2500
     return AIConfig(
-        api_key=os.getenv("DISPUTE_EXPERT_AI_API_KEY", "").strip(),
-        model=os.getenv("DISPUTE_EXPERT_AI_MODEL", "gpt-6-astra").strip() or "gpt-6-astra",
+        api_key=runtime_api_key or os.getenv("DISPUTE_EXPERT_AI_API_KEY", "").strip(),
+        model=runtime_model or os.getenv("DISPUTE_EXPERT_AI_MODEL", "gpt-6-astra").strip() or "gpt-6-astra",
         base_url=os.getenv("DISPUTE_EXPERT_AI_BASE_URL", "https://api.openai.com/v1/responses").strip(),
         reasoning_effort=os.getenv("DISPUTE_EXPERT_AI_REASONING_EFFORT", "low").strip() or "low",
         timeout=timeout,
@@ -67,7 +75,31 @@ def config() -> AIConfig:
 
 def public_status() -> dict:
     settings = config()
-    return {"enabled": settings.enabled, "model": settings.model if settings.enabled else None, "tasks": TASKS}
+    with _runtime_lock:
+        source = "session" if _runtime_api_key else "environment" if settings.enabled else "none"
+    return {"enabled": settings.enabled, "model": settings.model if settings.enabled else None, "source": source, "tasks": TASKS}
+
+
+def set_runtime_config(api_key: str, model: str = "") -> dict:
+    key = api_key.strip()
+    if not key or len(key) > 512:
+        raise AIServiceError("请输入有效的 OpenAI API Key。", 422)
+    selected_model = model.strip() or "gpt-6-astra"
+    if len(selected_model) > 100 or any(char.isspace() for char in selected_model):
+        raise AIServiceError("模型名称格式不正确。", 422)
+    global _runtime_api_key, _runtime_model
+    with _runtime_lock:
+        _runtime_api_key = key
+        _runtime_model = selected_model
+    return public_status()
+
+
+def clear_runtime_config() -> dict:
+    global _runtime_api_key, _runtime_model
+    with _runtime_lock:
+        _runtime_api_key = ""
+        _runtime_model = ""
+    return public_status()
 
 
 def _clip(value, limit: int = 3000) -> str:

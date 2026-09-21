@@ -21,6 +21,9 @@ class ApplicationTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.context.__exit__(None, None, None)
 
+    def tearDown(self):
+        ai_service.clear_runtime_config()
+
     def test_knowledge_counts_and_special_records(self):
         meta = self.client.get("/api/meta").json()
         self.assertEqual(meta["case_count"], 185)
@@ -101,6 +104,27 @@ class ApplicationTests(unittest.TestCase):
             self.assertFalse(result["enabled"])
             self.client.delete(f"/api/matters/{matter['id']}")
         self.assertEqual(self.client.post("/api/ai/analyze", json={"matter_id": "missing", "task": "risk_summary"}).status_code, 404)
+
+    def test_runtime_ai_config_does_not_expose_or_persist_key(self):
+        secret = "sk-local-test-secret"
+        with patch.dict(os.environ, {"DISPUTE_EXPERT_AI_API_KEY": ""}, clear=False):
+            response = self.client.post("/api/ai/config", json={"api_key": secret, "model": "test-model"})
+            self.assertEqual(response.status_code, 200)
+            status = response.json()
+            self.assertTrue(status["enabled"])
+            self.assertEqual(status["model"], "test-model")
+            self.assertEqual(status["source"], "session")
+            self.assertNotIn(secret, response.text)
+            self.assertNotIn("api_key", response.text.lower())
+
+            fetched = self.client.get("/api/ai/status")
+            self.assertNotIn(secret, fetched.text)
+            cleared = self.client.delete("/api/ai/config").json()
+            self.assertFalse(cleared["enabled"])
+            self.assertEqual(cleared["source"], "none")
+
+            invalid = self.client.post("/api/ai/config", json={"api_key": "", "model": "test model"})
+            self.assertEqual(invalid.status_code, 422)
 
     def test_ai_request_uses_selected_citations_and_does_not_update_matter(self):
         matter = self.client.post("/api/matters", json={"title": "AI模拟测试"}).json()
