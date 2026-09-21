@@ -29,6 +29,9 @@ SYSTEM_PROMPT = """你是工程纠纷案件分析助手，不是律师，不直�
 _runtime_lock = Lock()
 _runtime_api_key = ""
 _runtime_model = ""
+_connection_status = "untested"
+_connection_message = "尚未测试连接。"
+_last_tested_at = ""
 
 
 class AIServiceError(RuntimeError):
@@ -77,7 +80,18 @@ def public_status() -> dict:
     settings = config()
     with _runtime_lock:
         source = "session" if _runtime_api_key else "environment" if settings.enabled else "none"
-    return {"enabled": settings.enabled, "model": settings.model if settings.enabled else None, "source": source, "tasks": TASKS}
+        connection_status = _connection_status if settings.enabled else "disabled"
+        connection_message = _connection_message if settings.enabled else "AI 未启用。"
+        last_tested_at = _last_tested_at
+    return {
+        "enabled": settings.enabled,
+        "model": settings.model if settings.enabled else None,
+        "source": source,
+        "connection_status": connection_status,
+        "connection_message": connection_message,
+        "last_tested_at": last_tested_at,
+        "tasks": TASKS,
+    }
 
 
 def set_runtime_config(api_key: str, model: str = "") -> dict:
@@ -87,18 +101,75 @@ def set_runtime_config(api_key: str, model: str = "") -> dict:
     selected_model = model.strip() or "gpt-6-astra"
     if len(selected_model) > 100 or any(char.isspace() for char in selected_model):
         raise AIServiceError("模型名称格式不正确。", 422)
-    global _runtime_api_key, _runtime_model
+    global _runtime_api_key, _runtime_model, _connection_status, _connection_message, _last_tested_at
     with _runtime_lock:
         _runtime_api_key = key
         _runtime_model = selected_model
+        _connection_status = "untested"
+        _connection_message = "配置已保存，请测试连接。"
+        _last_tested_at = ""
     return public_status()
 
 
 def clear_runtime_config() -> dict:
-    global _runtime_api_key, _runtime_model
+    global _runtime_api_key, _runtime_model, _connection_status, _connection_message, _last_tested_at
     with _runtime_lock:
         _runtime_api_key = ""
         _runtime_model = ""
+        _connection_status = "untested"
+        _connection_message = "尚未测试连接。"
+        _last_tested_at = ""
+    return public_status()
+
+
+def _record_connection(status: str, message: str) -> None:
+    global _connection_status, _connection_message, _last_tested_at
+    with _runtime_lock:
+        _connection_status = status
+        _connection_message = message
+        _last_tested_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _request_json(settings: AIConfig, body: dict) -> dict:
+    request = Request(
+        settings.base_url,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": f"Bearer {settings.api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=settings.timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        if error.code == 401:
+            raise AIServiceError("AI 认证失败，请检查 OpenAI API Key。", 502) from error
+        if error.code == 429:
+            raise AIServiceError("AI 请求受到限流或账户额度不足，请检查账户后重试。", 429) from error
+        if error.code in {400, 404}:
+            raise AIServiceError(f"模型 {settings.model} 不可用或请求格式不受支持，请改用 gpt-6-astra 后重试。", 502) from error
+        raise AIServiceError(f"AI 服务暂时不可用（HTTP {error.code}）。", 502) from error
+    except (URLError, TimeoutError, socket.timeout) as error:
+        raise AIServiceError("AI 请求超时或网络不可用，本地功能不受影响。", 504) from error
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise AIServiceError("AI 返回格式无法解析，本次结果未写入案件。", 502) from error
+
+
+def test_connection() -> dict:
+    settings = config()
+    if not settings.enabled:
+        raise AIServiceError("请先保存 OpenAI API Key。", 422)
+    try:
+        payload = _request_json(settings, {
+            "model": settings.model,
+            "input": "仅回复 OK。",
+            "max_output_tokens": 32,
+        })
+        if not _extract_text(payload):
+            raise AIServiceError("模型未返回测试文本。", 502)
+    except AIServiceError as error:
+        _record_connection("failed", str(error))
+        raise
+    _record_connection("verified", "连接测试成功，可以在纠纷分析页使用 AI 功能。")
     return public_status()
 
 
@@ -173,26 +244,8 @@ def analyze(matter: dict, task: str, selected_citations: list[str] | None = None
         "reasoning": {"effort": settings.reasoning_effort},
         "max_output_tokens": settings.max_output_tokens,
     }
-    request = Request(
-        settings.base_url,
-        data=json.dumps(request_body, ensure_ascii=False).encode("utf-8"),
-        headers={"Authorization": f"Bearer {settings.api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
     request_id = uuid4().hex[:12]
-    try:
-        with urlopen(request, timeout=settings.timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as error:
-        if error.code == 401:
-            raise AIServiceError("AI 认证失败，请检查本机 API Key。", 502) from error
-        if error.code == 429:
-            raise AIServiceError("AI 请求受到限流，请稍后重试。", 429) from error
-        raise AIServiceError(f"AI 服务暂时不可用（HTTP {error.code}）。", 502) from error
-    except (URLError, TimeoutError, socket.timeout) as error:
-        raise AIServiceError("AI 请求超时或网络不可用，本地功能不受影响。", 504) from error
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise AIServiceError("AI 返回格式无法解析，本次结果未写入案件。", 502) from error
+    payload = _request_json(settings, request_body)
     return {
         "enabled": True,
         "matter_id": matter.get("id", ""),

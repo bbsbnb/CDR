@@ -114,6 +114,7 @@ class ApplicationTests(unittest.TestCase):
             self.assertTrue(status["enabled"])
             self.assertEqual(status["model"], "test-model")
             self.assertEqual(status["source"], "session")
+            self.assertEqual(status["connection_status"], "untested")
             self.assertNotIn(secret, response.text)
             self.assertNotIn("api_key", response.text.lower())
 
@@ -125,6 +126,26 @@ class ApplicationTests(unittest.TestCase):
 
             invalid = self.client.post("/api/ai/config", json={"api_key": "", "model": "test model"})
             self.assertEqual(invalid.status_code, 422)
+
+    def test_ai_connection_check_tracks_success_and_failure(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return json.dumps({"output_text": "OK"}).encode("utf-8")
+
+        self.client.post("/api/ai/config", json={"api_key": "sk-test", "model": "test-model"})
+        with patch.object(ai_service, "urlopen", return_value=Response()):
+            result = self.client.post("/api/ai/test").json()
+            self.assertEqual(result["connection_status"], "verified")
+            self.assertNotIn("sk-test", json.dumps(result))
+
+        from urllib.error import HTTPError
+        with patch.object(ai_service, "urlopen", side_effect=HTTPError("url", 404, "not found", {}, None)):
+            response = self.client.post("/api/ai/test")
+            self.assertEqual(response.status_code, 502)
+            status = self.client.get("/api/ai/status").json()
+            self.assertEqual(status["connection_status"], "failed")
+            self.assertIn("gpt-6-astra", status["connection_message"])
 
     def test_ai_request_uses_selected_citations_and_does_not_update_matter(self):
         matter = self.client.post("/api/matters", json={"title": "AI模拟测试"}).json()

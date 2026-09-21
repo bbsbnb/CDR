@@ -433,9 +433,11 @@ async function loadAiStatus() {
   if (!status || !button) return;
   try {
     const data = await api('/api/ai/status');
-    status.textContent = data.enabled ? `已启用 · ${data.model}` : '未启用';
-    status.className = data.enabled ? 'ai-state enabled' : 'ai-state';
-    button.disabled = !data.enabled;
+    const verified = data.connection_status === 'verified';
+    status.textContent = verified ? `连接正常 · ${data.model}` : data.enabled ? '配置待验证' : '未启用';
+    status.className = verified ? 'ai-state enabled' : 'ai-state';
+    status.title = data.connection_message || '';
+    button.disabled = !verified;
   } catch {
     status.textContent = '状态不可用';
     status.className = 'ai-state';
@@ -676,25 +678,39 @@ async function renderApiConfig() {
     const data = await api('/api/ai/status');
     const taskRows = Object.entries(data.tasks || {}).map(([key, label]) => `<div class="api-task"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(key)}</span></div>`).join('');
     const source = data.source === 'session' ? '当前服务会话' : data.source === 'environment' ? '本机环境变量' : '未配置';
+    const connectionLabel = data.connection_status === 'verified' ? '连接正常' : data.connection_status === 'failed' ? '连接失败' : data.enabled ? '等待测试' : '未启用';
+    const connectionClass = data.connection_status === 'verified' ? 'verified' : data.connection_status === 'failed' ? 'failed' : '';
     app.innerHTML = `<div class="page-head"><div><h2>API 配置</h2><p>管理本机大模型调用状态与安全配置</p></div><button class="button" id="refresh-api-status">刷新状态</button></div>
-      <div class="notice ${data.enabled ? 'info' : ''}"><b>${data.enabled ? 'AI 已启用' : 'AI 未启用'}</b> · ${data.enabled ? `当前模型：${escapeHtml(data.model || '未返回')}` : '本地案例库、制度库、案件工作台和报告导出不受影响。'}</div>
-      <div class="api-config-grid"><section class="panel"><div class="panel-title"><h3>连接状态</h3><span class="api-status-dot ${data.enabled ? 'on' : ''}"></span></div><div class="api-facts"><div><span>启用状态</span><strong>${data.enabled ? '已启用' : '未启用'}</strong></div><div><span>当前模型</span><strong>${escapeHtml(data.model || '未配置')}</strong></div><div><span>配置来源</span><strong>${source}</strong></div><div><span>数据范围</span><strong>当前案件摘要与已选依据</strong></div></div></section><section class="panel"><div class="panel-title"><h3>支持的分析任务</h3></div><div class="api-task-list">${taskRows}</div></section></div>
-      <section class="panel"><div class="panel-title"><div><h3>自定义 OpenAI Key</h3><p>Key 仅发送到本机 127.0.0.1 服务并保存在进程内存中，重启服务后自动清除。</p></div></div><form id="api-config-form" class="api-config-form" autocomplete="off"><label><span>OpenAI API Key</span><input id="api-key-input" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-..." required maxlength="512"></label><label><span>模型</span><input id="api-model-input" value="${escapeHtml(data.model || 'gpt-6-astra')}" maxlength="100" required></label><div class="page-actions"><button class="button primary" type="submit">保存并启用</button>${data.source === 'session' ? '<button class="button danger" type="button" id="clear-api-config">清除会话配置</button>' : ''}</div></form><div class="notice danger">Key 不会写入浏览器存储、SQLite、日志或 Git，但保存时会通过本机 HTTP 请求传给后端。不要在公共网络环境暴露本服务。</div></section>`;
+      <div class="notice ${data.connection_status === 'verified' ? 'info' : data.connection_status === 'failed' ? 'danger' : ''}"><b>${connectionLabel}</b> · ${escapeHtml(data.connection_message || (data.enabled ? `当前模型：${data.model}` : '本地功能不受影响。'))}</div>
+      <div class="api-config-grid"><section class="panel"><div class="panel-title"><h3>连接状态</h3><span class="api-status-dot ${connectionClass}"></span></div><div class="api-facts"><div><span>配置状态</span><strong>${data.enabled ? '已保存' : '未配置'}</strong></div><div><span>连接验证</span><strong>${connectionLabel}</strong></div><div><span>当前模型</span><strong>${escapeHtml(data.model || '未配置')}</strong></div><div><span>配置来源</span><strong>${source}</strong></div><div><span>数据范围</span><strong>测试连接不发送案件资料</strong></div><div><span>最后测试</span><strong>${escapeHtml(data.last_tested_at ? data.last_tested_at.replace('T', ' ') : '尚未测试')}</strong></div></div>${data.enabled ? '<button class="button" id="test-api-connection">测试连接</button>' : ''}</section><section class="panel"><div class="panel-title"><h3>支持的分析任务</h3></div><div class="api-task-list">${taskRows}</div></section></div>
+      <section class="panel"><div class="panel-title"><div><h3>自定义 OpenAI Key</h3><p>Key 仅发送到本机 127.0.0.1 服务并保存在进程内存中，重启服务后自动清除。</p></div></div><form id="api-config-form" class="api-config-form" autocomplete="off"><label><span>OpenAI API Key</span><input id="api-key-input" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-..." required maxlength="512"></label><label><span>OpenAI 模型</span><input id="api-model-input" list="openai-models" value="${escapeHtml(data.model || 'gpt-6-astra')}" maxlength="100" required><datalist id="openai-models"><option value="gpt-6-astra"><option value="gpt-5.6-sol"><option value="gpt-5.6-terra"><option value="gpt-5.6-luna"></datalist></label><div class="page-actions"><button class="button primary" type="submit">保存并测试</button>${data.source === 'session' ? '<button class="button danger" type="button" id="clear-api-config">清除会话配置</button>' : ''}</div></form><div class="notice danger">Key 不会写入浏览器存储、SQLite、日志或 Git。仅使用 OpenAI Responses API 可用的模型标识，推荐 gpt-6-astra。</div></section>`;
     $('#refresh-api-status').addEventListener('click', renderApiConfig);
+    $('#test-api-connection')?.addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = '测试中…';
+      try {
+        await api('/api/ai/test', { method: 'POST' });
+        toast('OpenAI 连接测试成功');
+      } catch (error) {
+        toast(`连接失败：${apiErrorMessage(error)}`);
+      }
+      await renderApiConfig();
+    });
     $('#api-config-form').addEventListener('submit', async event => {
       event.preventDefault();
       const submit = event.currentTarget.querySelector('[type="submit"]');
       submit.disabled = true;
-      submit.textContent = '正在启用…';
+      submit.textContent = '正在测试…';
       try {
         await api('/api/ai/config', { method: 'POST', body: { api_key: $('#api-key-input').value, model: $('#api-model-input').value } });
         $('#api-key-input').value = '';
-        toast('AI 会话配置已启用');
+        await api('/api/ai/test', { method: 'POST' });
+        toast('配置已保存，OpenAI 连接正常');
         await renderApiConfig();
       } catch (error) {
-        submit.disabled = false;
-        submit.textContent = '保存并启用';
-        toast(`配置失败：${error.message}`);
+        toast(`配置或连接失败：${apiErrorMessage(error)}`);
+        await renderApiConfig();
       }
     });
     $('#clear-api-config')?.addEventListener('click', async () => {
@@ -705,6 +721,16 @@ async function renderApiConfig() {
   } catch (error) {
     app.innerHTML = `<div class="empty-state"><b>配置状态读取失败</b>${escapeHtml(error.message)}<br><button class="button" id="retry-api-status">重试</button></div>`;
     $('#retry-api-status').addEventListener('click', renderApiConfig);
+  }
+}
+
+function apiErrorMessage(error) {
+  const text = String(error?.message || error || '未知错误');
+  try {
+    const parsed = JSON.parse(text);
+    return parsed.detail || text;
+  } catch {
+    return text;
   }
 }
 

@@ -11,7 +11,7 @@ from .data_loader import KnowledgeBase
 from .database import add_citation, create_matter, delete_matter, get_matter, init_db, list_matters, update_matter
 from .exporter import build_markdown
 from .search import search_documents
-from .ai_service import AIServiceError, analyze as analyze_ai, clear_runtime_config, public_status, set_runtime_config
+from .ai_service import AIServiceError, analyze as analyze_ai, clear_runtime_config, public_status, set_runtime_config, test_connection
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -200,6 +200,14 @@ def ai_config_update(payload: AIConfigPayload) -> dict:
 @app.delete("/api/ai/config")
 def ai_config_delete() -> dict:
     return clear_runtime_config()
+
+
+@app.post("/api/ai/test")
+def ai_connection_test() -> dict:
+    try:
+        return test_connection()
+    except AIServiceError as error:
+        raise HTTPException(error.status_code, str(error)) from error
 
 
 @app.post("/api/ai/analyze")
